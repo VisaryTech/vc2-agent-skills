@@ -1,0 +1,4 @@
+interface:
+  display_name: "СБИС ЭДО"
+  short_description: "Документы и черновики СБИС через прямой API"
+  default_prompt: "Используй $sbis, чтобы найти документы в СБИС и проверить их состояние."
