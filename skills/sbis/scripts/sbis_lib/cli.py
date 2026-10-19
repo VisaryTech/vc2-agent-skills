@@ -36,7 +36,7 @@ def parser():
     p.add_argument("--cache-dir", help="каталог приватного кэша токена вместо стандартного")
     p.add_argument("--timeout", type=float, default=60, help="таймаут HTTPS в секундах")
     sub = p.add_subparsers(dest="command", required=True, parser_class=Parser)
-    sub.add_parser("check", help="проверить доступ по текущему пользователю")
+    sub.add_parser("check", help="проверить доступ к организациям ЭДО")
     sub.add_parser("organizations", help="получить организации аккаунта")
     ls = sub.add_parser("list", help="список документов")
     ls.add_argument("--filter", required=True, help="JSON-файл с объектом Фильтр (без обёртки), или -")
@@ -62,7 +62,7 @@ def parser():
 
 def run(args, client):
     if args.command == "check":
-        client.rpc("СБИС.ИнформацияОТекущемПользователе", {})
+        client.rpc("СБИС.СписокНашихОрганизаций", {"Фильтр": {}})
         return {"ok": True, "profile": client.profile}
     if args.command == "organizations":
         return client.rpc("СБИС.СписокНашихОрганизаций", {"Фильтр": {}})

@@ -573,6 +573,27 @@ class DocumentTests(unittest.TestCase):
             with patch.object(cli, "MAX_REQUEST", 10), self.assertRaises(common.ClientError):
                 cli.run(args, client())
 
+    def test_check_uses_edo_organizations_without_exposing_details(self):
+        for rows in ([], [{"СвЮЛ": {"Название": "private company", "ИНН": "1234567890"}}]):
+            with self.subTest(rows=rows):
+                c = client({"НашаОрганизация": rows})
+                out = io.StringIO()
+                with patch.object(cli, "Client", return_value=c), redirect_stdout(out):
+                    self.assertEqual(cli.main(["check"]), 0)
+                self.assertEqual(json.loads(out.getvalue()), {"ok": True, "profile": "production"})
+                self.assertEqual(len(c.transport.calls), 1)
+                self.assertEqual(c.transport.calls[0][1]["method"], "СБИС.СписокНашихОрганизаций")
+                self.assertEqual(c.transport.calls[0][1]["params"], {"Фильтр": {}})
+
+    def test_check_reports_access_failure_without_success_output(self):
+        c = client((403, b"private server response"))
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(cli, "Client", return_value=c), redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(cli.main(["check"]), 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(json.loads(err.getvalue())["error"]["code"], "access_denied")
+        self.assertEqual(len(c.transport.calls), 1)
+
     def test_check_organizations_read_and_main_json(self):
         for argv, results, expected in [
                 (["check"], [{"sid": "must-not-print"}], {"ok": True, "profile": "production"}),
