@@ -1,0 +1,3 @@
+interface:
+  display_name: "1С OData"
+  short_description: "Импорт первички в 1С без проведения через OData"
