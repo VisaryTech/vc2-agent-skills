@@ -1,4 +1,4 @@
-"""Bounded OData HTTP requests. POST is never retried here."""
+"""Bounded OData HTTP requests. Only GET may be retried."""
 import base64
 import datetime as dt
 import email.utils
@@ -6,7 +6,6 @@ import json
 import math
 from http.client import HTTPException
 import os
-from pathlib import Path
 import posixpath
 import time
 import urllib.error
@@ -26,11 +25,8 @@ class Config:
                 "Нужен HTTPS URL; HTTP тестовой базы требует ONEC_ODATA_ALLOW_HTTP=1.", "configuration_error")
         require(bool(parts.netloc) and not parts.username and not parts.password and not parts.query and not parts.fragment,
                 "Некорректный корневой OData URL.", "configuration_error")
-        require(self.username == "ai_accountant" and bool(self.password),
-                "Задайте ONEC_ODATA_USERNAME=ai_accountant и ONEC_ODATA_PASSWORD.", "configuration_error")
-        self.state_dir = Path(os.environ.get("ONEC_ODATA_STATE_DIR", "~/.local/state/onec-odata")).expanduser().resolve()
-        repo = Path(__file__).resolve().parents[4]
-        require(not self.state_dir.is_relative_to(repo), "Каталог состояния должен находиться вне репозитория.", "configuration_error")
+        require(bool(self.username.strip()) and bool(self.password),
+                "Задайте ONEC_ODATA_USERNAME и ONEC_ODATA_PASSWORD.", "configuration_error")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -39,8 +35,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Transport:
-    def __init__(self, config, log=lambda **_: None, sleep=time.sleep):
-        self.base, self.log, self.sleep = config.base, log, sleep
+    def __init__(self, config, sleep=time.sleep, allow_mutations=False):
+        self.base, self.sleep = config.base, sleep
+        self.allow_mutations = allow_mutations
         token = base64.b64encode((config.username + ":" + config.password).encode()).decode()
         self.headers = {"Authorization": "Basic " + token, "Accept": "application/json",
                         "DataServiceVersion": "3.0", "MaxDataServiceVersion": "3.0"}
@@ -58,7 +55,8 @@ class Transport:
         return target
 
     def request(self, method, address, payload=None, metadata=False):
-        require(method in {"GET", "POST"}, "HTTP-метод запрещён.", "write_forbidden")
+        require(method in ({"GET", "POST", "PATCH", "DELETE"} if self.allow_mutations else {"GET"}),
+                "HTTP-метод запрещён.", "write_forbidden")
         target = self.safe_url(address)
         body = wire_json(payload).encode() if payload is not None else None
         require(body is None or len(body) <= MAX_BYTES, "Запрос превышает 16 МиБ.")
@@ -79,21 +77,20 @@ class Transport:
                         status, response_headers = response.status, dict(response.headers)
                         raw = response.read(MAX_BYTES + 1)
                     if len(raw) > MAX_BYTES:
-                        raise Error("write_outcome_unknown" if method == "POST" else "response_too_large", "Ответ превышает 16 МиБ.")
+                        raise Error("write_outcome_unknown" if method != "GET" else "response_too_large", "Ответ превышает 16 МиБ.")
             except (OSError, EOFError, HTTPException):
                 status = None
-            self.log(event="http", method=method, status=status, attempt=attempt + 1)
             if status is not None and 200 <= status < 300:
                 if metadata:
                     return raw
                 try:
                     return json.loads(raw, parse_float=WireNumber) if raw else None
                 except (ValueError, UnicodeError):
-                    raise Error("write_outcome_unknown" if method == "POST" else "invalid_response", "Некорректный JSON ответа.") from None
+                    raise Error("write_outcome_unknown" if method != "GET" else "invalid_response", "Некорректный JSON ответа.") from None
             transient = status is None or status in {429, 502, 503, 504}
-            if method == "POST":
+            if method != "GET":
                 code = "http_error" if status in {400, 401, 403, 404, 405, 409, 413, 415, 422} else "write_outcome_unknown"
-                raise Error(code, "Создание не подтверждено; автоматического повтора POST нет.", http_status=status)
+                raise Error(code, "Запись не подтверждена; автоматического повтора нет.", http_status=status)
             if not transient or attempt == 3:
                 raise Error("temporary_error" if transient else "http_error", "OData-запрос не выполнен.", http_status=status)
             wait = 2 ** attempt

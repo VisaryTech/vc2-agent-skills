@@ -9,6 +9,14 @@ def local(tag):
     return tag.rsplit("}", 1)[-1]
 
 
+def annotations(elem):
+    """Preserve inline CSDL annotations without interpreting business semantics."""
+    def node(value):
+        return {"kind": local(value.tag), **dict(value.attrib), "text": (value.text or "").strip(),
+                "children": [node(child) for child in value]}
+    return [node(child) for child in elem if local(child.tag) == "Annotation"]
+
+
 def parse_metadata(raw):
     require(b"<!DOCTYPE" not in raw.replace(b"\x00", b"").upper() and b"<!ENTITY" not in raw.replace(b"\x00", b"").upper(),
             "DTD и XML entities запрещены.", "invalid_metadata")
@@ -16,7 +24,7 @@ def parse_metadata(raw):
         root = ET.fromstring(raw)
     except ET.ParseError:
         raise Error("invalid_metadata", "Некорректный XML metadata.") from None
-    types, sets, operations, aliases = {}, {}, [], {}
+    types, sets, operations, aliases, targets = {}, {}, [], {}, {}
     schemas = [e for e in root.iter() if local(e.tag) == "Schema"]
     for schema in schemas:
         namespace = schema.get("Namespace", "")
@@ -38,13 +46,17 @@ def parse_metadata(raw):
                     elif tag == "Member":
                         members.append(child.get("Name"))
                 types[name] = {"kind": kind, "base": elem.get("BaseType"), "properties": properties,
-                               "navigation": navigation, "keys": keys, "members": members}
+                               "navigation": navigation, "keys": keys, "members": members,
+                               "annotations": annotations(elem)}
+                targets[name] = types[name]
             elif kind == "EntityContainer":
                 for child in elem:
                     if local(child.tag) == "EntitySet":
                         name = child.get("Name")
                         require(name not in sets, "Неоднозначные EntitySet.", "invalid_metadata")
-                        sets[name] = {"type": child.get("EntityType"), "attributes": dict(child.attrib)}
+                        sets[name] = {"type": child.get("EntityType"), "attributes": dict(child.attrib),
+                                      "annotations": annotations(child)}
+                        targets[namespace + "." + elem.get("Name", "") + "/" + name] = sets[name]
                     elif local(child.tag) in {"FunctionImport", "ActionImport"}:
                         operations.append(dict(child.attrib))
             elif kind in {"Function", "Action", "Association"}:
@@ -63,6 +75,11 @@ def parse_metadata(raw):
             prop["Type"] = qualify(prop.get("Type"))
     for spec in sets.values():
         spec["type"] = qualify(spec["type"])
+    for elem in root.iter():
+        if local(elem.tag) == "Annotations":
+            target = targets.get(qualify(elem.get("Target")))
+            if target is not None:
+                target["annotations"].extend(annotations(elem))
     require(bool(sets), "Metadata не содержит EntitySet.", "invalid_metadata")
     return {"sha256": hashlib.sha256(raw).hexdigest(), "types": types,
             "entity_sets": sets, "operations": operations}
@@ -79,15 +96,16 @@ class Schema:
             parent = self.type(result["base"], (*seen, name))
             result["properties"] = {**parent["properties"], **result["properties"]}
             result["keys"] = result["keys"] or parent["keys"]
+            result["navigation"] = {**parent["navigation"], **result["navigation"]}
         return result
 
     def entity(self, name):
         require(isinstance(name, str) and bool(re.fullmatch(r"[^\W\d]\w*", name))
-                and name in self.data["entity_sets"], "EntitySet отсутствует в metadata.", "invalid_profile")
+                and name in self.data["entity_sets"], "EntitySet отсутствует в metadata.", "invalid_input")
         result = self.type(self.data["entity_sets"][name]["type"])
-        require(result["kind"] == "EntityType", "Ожидался EntityType.", "invalid_profile")
+        require(result["kind"] == "EntityType", "Ожидался EntityType.", "invalid_input")
         return result
 
     def property(self, spec, name):
-        require(isinstance(name, str) and name in spec["properties"], "Поле отсутствует в metadata.", "invalid_profile")
+        require(isinstance(name, str) and name in spec["properties"], "Поле отсутствует в metadata.", "invalid_input")
         return spec["properties"][name]
