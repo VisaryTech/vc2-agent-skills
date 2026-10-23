@@ -8,9 +8,10 @@ import uuid
 
 from .metadata import Schema, parse_metadata
 from .common import Error, WireNumber, require
+from .reads import ReadQueries
 
 
-class EntityClient:
+class EntityClient(ReadQueries):
     """Discover and validate physical entity fields directly from CSDL."""
 
     def __init__(self, transport, metadata=None):
@@ -20,6 +21,7 @@ class EntityClient:
 
     def encode(self, entity, payload):
         require(isinstance(payload, dict), "Payload должен быть объектом.")
+        require(all(not name.endswith("____Presentation") for name in payload), "Представления доступны только для чтения.")
         return {key: self.value(self.schema.property(entity, key), value) for key, value in payload.items()}
 
     def value(self, prop, value):
@@ -197,68 +199,22 @@ class EntityClient:
         return isinstance(actual, dict) and all(name in actual and self.equal(spec["properties"][name], actual[name], value)
                                                 for name, value in expected.items())
 
-    def get(self, entity, key, missing_ok=False):
+    def get(self, entity, key, missing_ok=False, with_headers=False):
         encoded = self.keys(entity, key)
+        headers = {}
         try:
-            result = self.transport.request("GET", self.address(entity, key) + "?$format=json")
+            options = {"with_headers": True} if with_headers else {}
+            result = self.transport.request("GET", self.address(entity, key) + "?$format=json", **options)
+            if with_headers:
+                result, headers = result
         except Error as exc:
             if missing_ok and exc.details.get("http_status") == 404:
-                return None
+                return (None, {}) if with_headers else None
             raise
         if isinstance(result, dict) and "d" in result:
             result = result["d"]
         require(self.matches(self.schema.entity(entity), result, encoded), "Ответ не соответствует ключу.", "invalid_response")
-        return result
-
-    def query_entity(self, entity, where=None, select=(), order_by=(), limit=100):
-        spec = self.schema.entity(entity)
-        require(where is None or isinstance(where, dict), "Условия должны быть объектом.")
-        require(limit is None or type(limit) is int and 1 <= limit <= 10000, "Лимит должен быть 1–10000.")
-        where = where or {}
-        conditions = self.encode(spec, where)
-        terms = [name + " eq " + self.literal(spec["properties"][name], value) for name, value in where.items()]
-        params = {"$format": "json"}
-        for name in select:
-            self.schema.property(spec, name)
-        if select:
-            # Include filter fields for local verification; project them out below.
-            params["$select"] = ",".join(dict.fromkeys([*select, *where]))
-        ordering = []
-        for term in order_by:
-            pieces = term.split()
-            require(len(pieces) in {1, 2} and (len(pieces) == 1 or pieces[1] in {"asc", "desc"}), "Некорректная сортировка.")
-            self.schema.property(spec, pieces[0])
-            ordering.append(" ".join(pieces))
-        if ordering:
-            params["$orderby"] = ",".join(ordering)
-        if terms:
-            params["$filter"] = " and ".join(terms)
-        if limit is not None:
-            params["$top"] = str(limit)
-        address = self.address(entity) + "?" + url.urlencode(params, quote_via=url.quote)
-        rows, visited = [], set()
-        while address:
-            target = self.transport.safe_url(address)
-            require(target not in visited and len(visited) < 10000, "Циклическая или слишком длинная пагинация.", "invalid_response")
-            visited.add(target)
-            result = self.transport.request("GET", target)
-            if isinstance(result, dict) and "d" in result:
-                result = result["d"]
-            if isinstance(result, list):
-                page, following = result, None
-            else:
-                require(isinstance(result, dict), "Некорректный ответ коллекции.", "invalid_response")
-                page = result.get("value", result.get("results"))
-                following = result.get("odata.nextLink", result.get("@odata.nextLink", result.get("__next")))
-            require(isinstance(page, list) and all(self.matches(spec, row, conditions) for row in page),
-                    "Ответ не соответствует фильтру.", "invalid_response")
-            rows.extend({k: v for k, v in row.items() if k in select} if select else row for row in page)
-            require(len(rows) <= 100000, "Уточните фильтр: слишком много записей.", "query_too_large")
-            if limit is not None and len(rows) >= limit:
-                return rows[:limit]
-            require(following is None or isinstance(following, str), "Некорректный nextLink.", "invalid_response")
-            address = url.urljoin(target, following) if following else None
-        return rows
+        return (result, headers) if with_headers else result
 
     def check_write(self, entity, operation, payload, actual=None):
         spec = self.schema.entity(entity)
@@ -296,7 +252,16 @@ class Mutations:
     def __init__(self, client):
         self.client = client
 
-    def execute(self, entity, operation, data=None, key=None, dry_run=False):
+    def execute(self, entity, operation, data=None, key=None, dry_run=False, if_match=None):
+        try:
+            return self._execute(entity, operation, data, key, dry_run, if_match)
+        except Error as exc:
+            exc.details.setdefault("entity_set", entity)
+            exc.details.setdefault("operation", operation)
+            # Only expose validated keys; malformed input need not be echoed.
+            raise
+
+    def _execute(self, entity, operation, data, key, dry_run, if_match):
         require(operation in {"create", "update", "mark-deletion", "delete"}, "Неизвестная операция.")
         spec = self.client.schema.entity(entity)
         require(bool(spec["keys"]), "Запись сущности без объявленных ключей не поддерживается.", "unsupported_type")
@@ -311,24 +276,37 @@ class Mutations:
             require(bool(payload), "Передайте обновляемые поля.")
         if operation == "create":
             require(key is None, "Ключ создания задаётся в payload.")
+            require(if_match is None, "If-Match не применяется к созданию.")
         else:
             key = self.client.keys(entity, key)
-        actual = None if operation == "create" else self.client.get(entity, key, missing_ok=operation == "delete")
+        actual, response_headers = (None, {}) if operation == "create" else self.client.get(
+            entity, key, missing_ok=operation == "delete", with_headers=True)
         require(operation == "create" or actual is not None, "Объект не найден.", "object_not_found")
         self.client.check_write(entity, operation, payload, actual)
         method = {"create": "POST", "update": "PATCH", "mark-deletion": "PATCH", "delete": "DELETE"}[operation]
         address = self.client.address(entity, key) + "?$format=json"
+        version = if_match
+        if operation != "create" and version is None:
+            version = next((value for name, value in response_headers.items() if name.lower() == "etag"), None)
+            if version is None:
+                version = actual.get("DataVersion")
+        require(version is None or isinstance(version, str) and 0 < len(version) <= 4096
+                and all(32 <= ord(char) <= 126 for char in version), "Некорректная версия объекта.")
+        headers = {"If-Match": version} if version is not None else {}
         if dry_run:
             return {"ok": True, "dry_run": True, "method": method,
-                    "entity_set": entity, "key": key, "payload": payload, "write_access": "not_tested"}
+                    "entity_set": entity, "key": key, "payload": payload, "write_access": "not_tested",
+                    "headers": headers, "concurrency_protected": version is not None and version != "*"}
         if operation == "create" and set(spec["keys"]) <= set(payload):
             key = self.client.keys(entity, {name: payload[name] for name in spec["keys"]})
         try:
-            response = self.client.transport.request(method, address, None if method == "DELETE" else payload)
+            options = {"headers": headers} if headers else {}
+            response = self.client.transport.request(method, address, None if method == "DELETE" else payload, **options)
         except Error as exc:
+            exc.details.setdefault("key", key)
             if exc.code == "write_outcome_unknown":
                 raise Error(exc.code, "Результат записи неизвестен. Перед повтором проверьте объект в 1С.",
-                            entity_set=entity, operation=operation, key=key, **exc.details) from None
+                            **{**exc.details, "entity_set": entity, "operation": operation, "key": key}) from None
             raise
         # A failure after a successful write is an uncertain write, not a safe-to-retry read error.
         try:

@@ -1,3 +1,3 @@
 interface:
   display_name: "1С OData"
-  short_description: "Универсальный доступ к сущностям 1С по метаданным OData"
+  short_description: "Сущности и регистры 1С по OData: чтение, фильтры и CRUD"

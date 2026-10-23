@@ -67,6 +67,8 @@ class MemoryService:
         self.hide_write = False
         self.omit_key = False
         self.response_shape = 'value'
+        self.response_headers = {}
+        self.write_headers = []
         self.seed(ENTITY, {**KEY, 'Название': 'Исходное', 'DeletionMark': False})
         self.doc_key = {'Ref_Key': IDS['item']}
         self.seed('Document_Тест', {**self.doc_key, 'Posted': False, 'DeletionMark': False, 'Number': '1'})
@@ -78,7 +80,11 @@ class MemoryService:
     def safe_url(self, address):
         return Transport.safe_url(self, address)
 
-    def request(self, method, address, payload=None, metadata=False):
+    def request(self, method, address, payload=None, metadata=False, headers=None, with_headers=False):
+        if with_headers:
+            return MemoryService.request(self, method, address, payload, metadata), dict(self.response_headers)
+        if headers:
+            self.write_headers.append(dict(headers))
         self.calls.append((method, address, copy.deepcopy(payload)))
         if metadata:
             return RAW

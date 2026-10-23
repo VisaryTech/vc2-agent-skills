@@ -54,13 +54,19 @@ class Transport:
                 and (path + "/").startswith(root), "Ссылка выходит за пределы OData-публикации.", "unsafe_url")
         return target
 
-    def request(self, method, address, payload=None, metadata=False):
+    def request(self, method, address, payload=None, metadata=False, headers=None, with_headers=False):
         require(method in ({"GET", "POST", "PATCH", "DELETE"} if self.allow_mutations else {"GET"}),
                 "HTTP-метод запрещён.", "write_forbidden")
         target = self.safe_url(address)
         body = wire_json(payload).encode() if payload is not None else None
         require(body is None or len(body) <= MAX_BYTES, "Запрос превышает 16 МиБ.")
-        headers = {**self.headers, "Content-Type": "application/json; charset=utf-8"}
+        extra_headers = headers or {}
+        require(all(name == "If-Match" for name in extra_headers), "Заголовок не разрешён.")
+        require(not extra_headers or method in {"PATCH", "DELETE"}, "If-Match разрешён только для PATCH/DELETE.")
+        require(all(isinstance(value, str) and 0 < len(value) <= 4096
+                    and all(32 <= ord(char) <= 126 for char in value) for value in extra_headers.values()),
+                "Некорректная версия объекта.")
+        headers = {**self.headers, "Content-Type": "application/json; charset=utf-8", **extra_headers}
         if metadata:
             headers["Accept"] = "application/xml"
         for attempt in range(4):
@@ -82,12 +88,17 @@ class Transport:
                 status = None
             if status is not None and 200 <= status < 300:
                 if metadata:
-                    return raw
+                    return (raw, response_headers) if with_headers else raw
                 try:
-                    return json.loads(raw, parse_float=WireNumber) if raw else None
+                    result = json.loads(raw, parse_float=WireNumber) if raw else None
+                    return (result, response_headers) if with_headers else result
                 except (ValueError, UnicodeError):
                     raise Error("write_outcome_unknown" if method != "GET" else "invalid_response", "Некорректный JSON ответа.") from None
             transient = status is None or status in {429, 502, 503, 504}
+            known_error = {401: "authentication_error", 403: "access_denied", 404: "object_not_found",
+                           405: "operation_not_supported", 412: "concurrency_conflict"}.get(status)
+            if known_error:
+                raise Error(known_error, "OData-запрос отклонён сервером.", http_status=status)
             if method != "GET":
                 code = "http_error" if status in {400, 401, 403, 404, 405, 409, 413, 415, 422} else "write_outcome_unknown"
                 raise Error(code, "Запись не подтверждена; автоматического повтора нет.", http_status=status)

@@ -22,6 +22,24 @@ def parser():
     query.add_argument("--order-by", default="", help="Например: Date desc,Number asc")
     query.add_argument("--limit", type=int, default=100)
     query.add_argument("--all", action="store_true")
+    query.add_argument("--filter", help="JSON-дерево типизированных условий")
+    query.add_argument("--presentations", action="store_true")
+    query.add_argument("--expand", default="", help="Навигация первого уровня через запятую")
+    query.add_argument("--pagination", choices=("next-link", "skip"), default="next-link")
+    query.add_argument("--page-size", type=int, default=100)
+    count = commands.add_parser("count")
+    count.add_argument("entity")
+    count.add_argument("--where", default="{}")
+    count.add_argument("--filter")
+    register = commands.add_parser("register")
+    register.add_argument("entity")
+    register.add_argument("table", choices=("slice-last", "slice-first", "balance", "turnovers", "balance-and-turnovers"))
+    register.add_argument("--period")
+    register.add_argument("--start-period")
+    register.add_argument("--end-period")
+    register.add_argument("--condition", help="JSON-дерево условий виртуальной таблицы")
+    register.add_argument("--select", default="")
+    register.add_argument("--limit", type=int, default=100)
     get = commands.add_parser("get")
     get.add_argument("entity")
     get.add_argument("--key", required=True, help="JSON-объект ключевых полей")
@@ -32,6 +50,7 @@ def parser():
             command.add_argument("input", help="JSON-файл с физическими полями")
         if name != "create":
             command.add_argument("--key", required=True, help="JSON-объект ключевых полей")
+            command.add_argument("--if-match", help="Явная ожидаемая версия объекта")
         if name == "mark-deletion":
             command.add_argument("--value", choices=("true", "false"), default="true")
         command.add_argument("--dry-run", action="store_true")
@@ -39,6 +58,16 @@ def parser():
 
 
 def run(args):
+    try:
+        return execute(args)
+    except Error as exc:
+        exc.details.setdefault("operation", args.command)
+        if hasattr(args, "entity"):
+            exc.details.setdefault("entity_set", args.entity)
+        raise
+
+
+def execute(args):
     config = Config()
     transport = Transport(config, allow_mutations=args.command in {
         "create", "update", "mark-deletion", "delete"} and not args.dry_run)
@@ -58,14 +87,26 @@ def run(args):
         return {"ok": True, "items": client.query_entity(args.entity, json_object(args.where),
                 [name.strip() for name in args.select.split(",") if name.strip()],
                 [term.strip() for term in args.order_by.split(",") if term.strip()],
-                None if args.all else args.limit)}
+                None if args.all else args.limit,
+                filter_tree=json_object(args.filter) if args.filter is not None else None,
+                presentations=args.presentations,
+                expand=[name.strip() for name in args.expand.split(",") if name.strip()],
+                pagination=args.pagination, page_size=args.page_size)}
+    if args.command == "count":
+        return {"ok": True, "count": client.count(args.entity, json_object(args.where),
+                json_object(args.filter) if args.filter is not None else None)}
+    if args.command == "register":
+        return {"ok": True, "items": client.register(args.entity, args.table, period=args.period,
+                start_period=args.start_period, end_period=args.end_period,
+                condition=json_object(args.condition) if args.condition is not None else None,
+                select=[name.strip() for name in args.select.split(",") if name.strip()], limit=args.limit)}
     key = json_object(args.key) if hasattr(args, "key") else None
     if args.command == "get":
         return {"ok": True, "item": client.get(args.entity, key)}
     data = load_json(args.input, exact=True) if hasattr(args, "input") else None
     if args.command == "mark-deletion":
         data = {"DeletionMark": args.value == "true"}
-    return Mutations(client).execute(args.entity, args.command, data, key, args.dry_run)
+    return Mutations(client).execute(args.entity, args.command, data, key, args.dry_run, getattr(args, "if_match", None))
 
 
 def json_object(raw):
