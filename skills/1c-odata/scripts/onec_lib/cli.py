@@ -3,12 +3,13 @@ import argparse
 import json
 from .common import Error, WireNumber, canonical, load_json, require
 from .generic import EntityClient, Mutations
-from .transport import Config, Transport
+from .transport import Config, Transport, validate_env
 
 
 def parser():
     result = argparse.ArgumentParser(description="1С OData — универсальный доступ по метаданным OData")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("check-env", help="Проверить окружение без подключения к 1С")
     commands.add_parser("check")
     commands.add_parser("discover")
     entities = commands.add_parser("entities")
@@ -68,6 +69,8 @@ def run(args):
 
 
 def execute(args):
+    if args.command == "check-env":
+        return validate_env()
     config = Config()
     transport = Transport(config, allow_mutations=args.command in {
         "create", "update", "mark-deletion", "delete"} and not args.dry_run)

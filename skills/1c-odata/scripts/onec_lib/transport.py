@@ -14,19 +14,33 @@ import urllib.request
 from .common import Error, MAX_BYTES, WireNumber, wire_json, require
 
 
+def validate_env():
+    """Validate process configuration without network access or exposing values."""
+    required = ("ONEC_ODATA_URL", "ONEC_ODATA_USERNAME", "ONEC_ODATA_PASSWORD")
+    missing = [name for name in required if not os.environ.get(name, "")
+               or (name != "ONEC_ODATA_PASSWORD" and not os.environ[name].strip())]
+    if missing:
+        raise Error("configuration_error", "Не заданы обязательные переменные окружения.", variables=missing)
+    try:
+        parts = url.urlsplit(os.environ["ONEC_ODATA_URL"].rstrip("/") + "/")
+        valid_url = (bool(parts.netloc) and not parts.username and not parts.password
+                     and not parts.query and not parts.fragment)
+    except ValueError:
+        valid_url = False
+    require(valid_url, "Некорректная переменная ONEC_ODATA_URL.", "configuration_error")
+    allow_http = os.environ.get("ONEC_ODATA_ALLOW_HTTP") == "1"
+    require(parts.scheme == "https" or (parts.scheme == "http" and allow_http),
+            "ONEC_ODATA_URL требует HTTPS; HTTP тестовой базы требует ONEC_ODATA_ALLOW_HTTP=1.",
+            "configuration_error")
+    return {"ok": True}
+
+
 class Config:
     def __init__(self):
-        self.base = os.environ.get("ONEC_ODATA_URL", "").rstrip("/") + "/"
-        self.username = os.environ.get("ONEC_ODATA_USERNAME", "")
-        self.password = os.environ.get("ONEC_ODATA_PASSWORD", "")
-        parts = url.urlsplit(self.base)
-        allow_http = os.environ.get("ONEC_ODATA_ALLOW_HTTP") == "1"
-        require(parts.scheme == "https" or (parts.scheme == "http" and allow_http),
-                "Нужен HTTPS URL; HTTP тестовой базы требует ONEC_ODATA_ALLOW_HTTP=1.", "configuration_error")
-        require(bool(parts.netloc) and not parts.username and not parts.password and not parts.query and not parts.fragment,
-                "Некорректный корневой OData URL.", "configuration_error")
-        require(bool(self.username.strip()) and bool(self.password),
-                "Задайте ONEC_ODATA_USERNAME и ONEC_ODATA_PASSWORD.", "configuration_error")
+        validate_env()
+        self.base = os.environ["ONEC_ODATA_URL"].rstrip("/") + "/"
+        self.username = os.environ["ONEC_ODATA_USERNAME"]
+        self.password = os.environ["ONEC_ODATA_PASSWORD"]
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

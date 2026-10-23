@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import sys
 
-from .auth import TokenProvider, load_credentials
+from .auth import TokenProvider, load_credentials, validate_env
 from .client import Client
 from .common import MAX_BYTES, ClientError, guid, redact, require
 from .drafts import copy_draft, prepare
@@ -43,6 +43,7 @@ def parser():
     p.add_argument("--timeout", type=float, default=60)
     p.add_argument("--box-id", help="GUID ящика или BoxId с суффиксом @diadoc.ru")
     sub = p.add_subparsers(dest="command", required=True)
+    sub.add_parser("check-env", help="проверить настройки без подключения к API")
     sub.add_parser("check")
     sub.add_parser("organizations")
     listing = sub.add_parser("list")
@@ -93,8 +94,12 @@ def run(args, client):
 
 def main(argv=None):
     secrets = []
+    args = None
     try:
         args = parser().parse_args(argv)
+        if args.command == "check-env":
+            print(json.dumps(validate_env(env_file=args.env_file), ensure_ascii=False))
+            return 0
         require(math.isfinite(args.timeout) and args.timeout > 0, "timeout должен быть конечным положительным числом.")
         transport = HttpTransport(args.timeout)
         provider = TokenProvider(load_credentials(env_file=args.env_file), transport)
@@ -104,6 +109,10 @@ def main(argv=None):
         print(json.dumps(redact(result, secrets), ensure_ascii=False, allow_nan=False))
         return 0
     except ClientError as exc:
+        if args is not None and args.command == "check-env":
+            print(json.dumps({"ok": False, "error": "configuration_error", "message": str(exc)},
+                             ensure_ascii=False))
+            return 2
         error = {"code": exc.code, "message": str(exc), **exc.details}
     except (OSError, ValueError, TypeError, KeyError):
         error = {"code": "client_error", "message": "Не удалось обработать данные или файлы; проверьте входные данные и доступ."}

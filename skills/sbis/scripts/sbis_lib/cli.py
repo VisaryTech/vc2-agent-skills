@@ -5,6 +5,7 @@ import json
 import math
 import sys
 
+from .auth import validate_env
 from .client import Client
 from .common import DEFAULT_MAX_PAGES, HOSTS, MAX_REQUEST, ClientError, format_size, redact, require
 from .drafts import prepare_draft, require_unlocked
@@ -36,6 +37,7 @@ def parser():
     p.add_argument("--cache-dir", help="каталог приватного кэша токена вместо стандартного")
     p.add_argument("--timeout", type=float, default=60, help="таймаут HTTPS в секундах")
     sub = p.add_subparsers(dest="command", required=True, parser_class=Parser)
+    sub.add_parser("check-env", help="проверить настройки без подключения к API")
     sub.add_parser("check", help="проверить доступ к организациям ЭДО")
     sub.add_parser("organizations", help="получить организации аккаунта")
     ls = sub.add_parser("list", help="список документов")
@@ -96,8 +98,12 @@ def run(args, client):
 
 def main(argv=None):
     client = None
+    args = None
     try:
         args = parser().parse_args(argv)
+        if args.command == "check-env":
+            print(json.dumps(validate_env(env_file=args.env_file), ensure_ascii=False))
+            return 0
         require(math.isfinite(args.timeout) and args.timeout > 0, "Таймаут должен быть положительным числом.")
         client = Client(args.profile, HttpTransport(args.timeout), env_file=args.env_file,
                         cache_root=args.cache_dir)
@@ -105,6 +111,10 @@ def main(argv=None):
         print(json.dumps(redact(result, client.secrets), ensure_ascii=False))
         return 0
     except ClientError as exc:
+        if args is not None and args.command == "check-env":
+            print(json.dumps({"ok": False, "error": "configuration_error", "message": str(exc)},
+                             ensure_ascii=False))
+            return 2
         print(json.dumps({"error": {"code": exc.code, "message": str(exc)}}, ensure_ascii=False), file=sys.stderr)
         return 1
     except (OSError, ValueError, TypeError, KeyError, AttributeError):

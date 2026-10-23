@@ -13,6 +13,22 @@ ENV_KEYS = ("DIADOC_CLIENT_ID", "DIADOC_CLIENT_SECRET", "DIADOC_REFRESH_TOKEN")
 TOKEN_URL = "https://identity.kontur.ru/connect/token"
 
 
+def validate_credentials(credentials, code="credentials_required"):
+    missing = [key for key in ENV_KEYS if not isinstance(credentials.get(key), str)
+               or not credentials[key].strip()]
+    require(not missing, "Не заданы обязательные переменные: " + ", ".join(missing) + ".", code)
+
+
+def validate_env(env=None, env_file=None):
+    """Check configured credentials without authentication or exposing values."""
+    try:
+        credentials = load_credentials(env, env_file)
+    except ClientError as exc:
+        raise ClientError("configuration_error", str(exc)) from None
+    validate_credentials(credentials, code="configuration_error")
+    return {"ok": True}
+
+
 class TokenProvider:
     def __init__(self, credentials, transport):
         self.credentials = dict(credentials)
@@ -24,10 +40,7 @@ class TokenProvider:
     def get_token(self):
         if self.token and time.monotonic() < self.refresh_at:
             return self.token
-        require(all(isinstance(self.credentials.get(key), str) and self.credentials[key].strip()
-                    for key in ENV_KEYS),
-                "Задайте DIADOC_CLIENT_ID, DIADOC_CLIENT_SECRET и DIADOC_REFRESH_TOKEN.",
-                "credentials_required")
+        validate_credentials(self.credentials)
         started = time.monotonic()
         payload = {"grant_type": "refresh_token", "client_id": self.credentials[ENV_KEYS[0]],
                    "client_secret": self.credentials[ENV_KEYS[1]],

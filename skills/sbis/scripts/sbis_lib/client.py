@@ -11,7 +11,7 @@ import socket
 import sys
 import urllib.error
 
-from .auth import ENV_KEYS, TokenCache, load_credentials
+from .auth import ENV_KEYS, TokenCache, load_credentials, validate_credentials
 from .common import DEFAULT_MAX_PAGES, HOSTS, MAX_FILE, MAX_REQUEST, ClientError, format_size, objects, require
 from .transport import HttpTransport, file_url
 
@@ -91,9 +91,7 @@ class Client:
     def authenticate(self):
         if self.token:
             return
-        require(all(isinstance(self.env.get(k), str) and self.env[k].strip() for k in ENV_KEYS),
-                "Задайте SBIS_APP_CLIENT_ID, SBIS_APP_SECRET и SBIS_SECRET_KEY в окружении или .env.",
-                "credentials_required")
+        validate_credentials(self.env)
         self.token = self.cache.load()
         if not self.token:
             payload = {key.removeprefix("SBIS_").lower(): self.env[key] for key in ENV_KEYS}

@@ -14,6 +14,22 @@ from .common import ClientError, require
 ENV_KEYS = ("SBIS_APP_CLIENT_ID", "SBIS_APP_SECRET", "SBIS_SECRET_KEY")
 
 
+def validate_credentials(credentials, code="credentials_required"):
+    missing = [key for key in ENV_KEYS if not isinstance(credentials.get(key), str)
+               or not credentials[key].strip()]
+    require(not missing, "Не заданы обязательные переменные: " + ", ".join(missing) + ".", code)
+
+
+def validate_env(env=None, env_file=None):
+    """Check configured credentials without authentication or token cache access."""
+    try:
+        credentials = load_credentials(env, env_file)
+    except ClientError as exc:
+        raise ClientError("configuration_error", str(exc)) from None
+    validate_credentials(credentials, code="configuration_error")
+    return {"ok": True}
+
+
 def load_credentials(env=None, env_file=None):
     """Merge process credentials with literal dotenv values, without changing os.environ."""
     source = os.environ if env is None else env

@@ -15,7 +15,83 @@ from onec_lib.generic import EntityClient
 from onec_lib.cli import main
 from onec_lib.common import Error, WireNumber, load_json, wire_json
 from onec_lib.metadata import parse_metadata, Schema
-from onec_lib.transport import Config, NoRedirect, Transport
+from onec_lib.transport import Config, NoRedirect, Transport, validate_env
+
+
+class EnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        self.env = {"ONEC_ODATA_URL": "https://private-host.invalid/base/odata",
+                    "ONEC_ODATA_USERNAME": "private-login", "ONEC_ODATA_PASSWORD": "private-password"}
+
+    def check_cli(self, env, expected_code):
+        stream = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), \
+                patch("onec_lib.cli.Transport") as transport, \
+                patch("urllib.request.build_opener") as opener, redirect_stdout(stream):
+            before = dict(os.environ)
+            self.assertEqual(main(["check-env"]), expected_code)
+            self.assertEqual(dict(os.environ), before)
+            transport.assert_not_called()
+            opener.assert_not_called()
+        output = stream.getvalue()
+        for value in env.values():
+            if len(value) > 1:
+                self.assertNotIn(value, output)
+        return json.loads(output)
+
+    def test_valid_environment_and_config(self):
+        self.assertEqual(self.check_cli(self.env, 0), {"ok": True})
+        with patch.dict(os.environ, self.env, clear=True):
+            self.assertEqual(validate_env(), {"ok": True})
+            config = Config()
+            self.assertEqual(config.base, self.env["ONEC_ODATA_URL"] + "/")
+            self.assertEqual(config.username, self.env["ONEC_ODATA_USERNAME"])
+            self.assertEqual(config.password, self.env["ONEC_ODATA_PASSWORD"])
+
+    def test_missing_and_empty_required_variables(self):
+        self.assertEqual(self.check_cli({}, 2)["variables"], list(self.env))
+        for name in self.env:
+            for value in (None, "", "   ") if name != "ONEC_ODATA_PASSWORD" else (None, ""):
+                with self.subTest(name=name, value=value):
+                    env = dict(self.env)
+                    if value is None:
+                        del env[name]
+                    else:
+                        env[name] = value
+                    result = self.check_cli(env, 2)
+                    self.assertEqual(result["error"], "configuration_error")
+                    self.assertEqual(result["variables"], [name])
+                    with patch.dict(os.environ, env, clear=True), self.assertRaises(Error) as caught:
+                        Config()
+                    self.assertEqual(caught.exception.code, "configuration_error")
+
+    def test_invalid_urls_are_configuration_errors(self):
+        for address in ("invalid-url", "https:///base", "https://[broken", "ftp://host/base",
+                        "https://user:secret@host/base", "https://host/base?private=query",
+                        "https://host/base#private-fragment"):
+            with self.subTest(address=address):
+                result = self.check_cli({**self.env, "ONEC_ODATA_URL": address}, 2)
+                self.assertEqual(result["error"], "configuration_error")
+                self.assertIn("ONEC_ODATA_URL", result["message"])
+
+    def test_http_requires_explicit_opt_in(self):
+        env = {**self.env, "ONEC_ODATA_URL": "http://private-host.invalid/base/odata"}
+        for flag in (None, "0", "true", "1"):
+            with self.subTest(flag=flag):
+                candidate = dict(env)
+                if flag is not None:
+                    candidate["ONEC_ODATA_ALLOW_HTTP"] = flag
+                result = self.check_cli(candidate, 0 if flag == "1" else 2)
+                if flag != "1":
+                    self.assertEqual(result["error"], "configuration_error")
+                    self.assertIn("ONEC_ODATA_ALLOW_HTTP", result["message"])
+
+    def test_other_commands_validate_before_network(self):
+        for command in ("check", "discover"):
+            with self.subTest(command=command), patch.dict(os.environ, {}, clear=True), \
+                    patch("onec_lib.cli.Transport") as transport, redirect_stdout(io.StringIO()):
+                self.assertEqual(main([command]), 2)
+                transport.assert_not_called()
 
 
 class MetadataTests(unittest.TestCase):
