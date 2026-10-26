@@ -39,7 +39,7 @@ def page_draft(record):
 def build_draft(manifest, records):
     """Assemble a document draft, including failed and partial pages."""
     successful = manifest["processed_pages"]
-    sections = ["# Черновик для визуальной сверки", f"Исходный PDF: {manifest['source_name']}",
+    sections = ["# Автоматическое извлечение PDF", f"Исходный PDF: {manifest['source_name']}",
                 f"Обработанные страницы: {', '.join(map(str, successful)) or 'нет'}.",
                 "Это технический черновик: структура, полнота, таблицы и формулы не проверены."]
     if not manifest["complete"]:
@@ -52,7 +52,7 @@ def build_draft(manifest, records):
         sections.append(f"## Страница {number}")
         sections.append(page_draft(by_page[number]) if number in by_page
                         else "[неразборчиво]\n\nСтраница не обработана из-за ошибки; см. замечания.")
-    sections.append("## Замечания\n\nВсе страницы требуют визуальной сверки; порядок колонок и кандидаты таблиц не подтверждены.")
+    sections.append("## Замечания\n\nВизуальная сверка не выполнялась; порядок колонок и кандидаты таблиц не подтверждены.")
     for entry in manifest["pages"]:
         for issue in entry.get("issues", []) + ([entry["error"]] if entry["status"] == "error" else []):
             sections.append(f"- Страница {entry['pdf_page']}: {issue}")
