@@ -1,0 +1,4 @@
+interface:
+  display_name: "PDF в Markdown"
+  short_description: "Извлечение PDF в Markdown с OCR и визуальной сверкой"
+  default_prompt: "Используй $pdf-to-markdown, чтобы преобразовать PDF в Markdown и сверить таблицы, числа и проблемные области с оригиналом."
