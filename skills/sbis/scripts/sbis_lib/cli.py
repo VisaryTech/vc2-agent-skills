@@ -50,6 +50,7 @@ def parser():
     dl = sub.add_parser("download", help="скачать вложения и подписи без распаковки")
     dl.add_argument("id")
     dl.add_argument("--output", required=True, help="каталог выгрузки")
+    dl.add_argument("--archive", action="store_true", help="скачать ZIP по Документ.СсылкаНаАрхив")
     for name in ("draft-create", "draft-update"):
         draft = sub.add_parser(name, help="создать/обновить исходящий черновик")
         if name == "draft-update":
@@ -73,7 +74,7 @@ def run(args, client):
     if args.command == "read":
         return client.read(args.id)
     if args.command == "download":
-        return client.download(args.id, args.output)
+        return client.download(args.id, args.output, archive=args.archive)
     document = prepare_draft(client, load_json(args.input), getattr(args, "id", None),
                              args.attachment, getattr(args, "replace_attachment", []),
                              getattr(args, "remove_attachment", []))

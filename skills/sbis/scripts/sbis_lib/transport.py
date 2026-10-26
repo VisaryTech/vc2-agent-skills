@@ -8,6 +8,26 @@ import urllib.request
 from .common import MAX_FILE, MAX_REQUEST, ClientError, format_size, require
 
 
+def check_archive_pending(data):
+    """Recognize the documented preparation code only in structured JSON."""
+    try:
+        result = json.loads(data)
+    except (ValueError, UnicodeError, RecursionError):
+        return
+    if not isinstance(result, (dict, list)):
+        return
+    pending = [result]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, str) and value.upper() == "00000000-0000-0000-0000-1AA0000F1002":
+            raise ClientError("archive_not_ready",
+                              "Архив ещё готовится. Повторите команду через 5–10 секунд.")
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -38,7 +58,7 @@ class HttpTransport:
             exc.close()
             raise
 
-    def get(self, url):
+    def get(self, url, *, archive=False):
         # Signed download URLs do not receive token headers. Validate every redirect.
         for _ in range(6):
             file_url(url)
@@ -46,9 +66,18 @@ class HttpTransport:
                 with self.opener.open(url, timeout=self.timeout) as response:
                     data = response.read(MAX_FILE + 1)
                     require(len(data) <= MAX_FILE, f"Файл превышает лимит клиента {format_size(MAX_FILE)}.")
+                    if archive:
+                        check_archive_pending(data)
                     return data
             except urllib.error.HTTPError as exc:
-                exc.close()
+                try:
+                    if archive and exc.code not in (301, 302, 303, 307, 308):
+                        data = exc.read(MAX_FILE + 1)
+                        require(len(data) <= MAX_FILE,
+                                f"Файл превышает лимит клиента {format_size(MAX_FILE)}.")
+                        check_archive_pending(data)
+                finally:
+                    exc.close()
                 if exc.code in (301, 302, 303, 307, 308) and exc.headers.get("Location"):
                     url = urllib.parse.urljoin(url, exc.headers["Location"])
                     continue

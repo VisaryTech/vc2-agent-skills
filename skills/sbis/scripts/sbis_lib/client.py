@@ -3,6 +3,7 @@
 import base64
 import copy
 import http.client
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import re
 import socket
 import sys
 import urllib.error
+import zipfile
 
 from .auth import ENV_KEYS, TokenCache, load_credentials, validate_credentials
 from .common import DEFAULT_MAX_PAGES, HOSTS, MAX_FILE, MAX_REQUEST, ClientError, format_size, objects, require
@@ -162,7 +164,7 @@ class Client:
                     "увеличьте --max-pages или сузьте фильтр.", "pagination_limit")
             page += 1
 
-    def get_file(self, info):
+    def get_file(self, info, *, archive=False):
         require(isinstance(info, dict), "Нет сведений о файле.")
         if info.get("ДвоичныеДанные") is not None:
             try:
@@ -174,6 +176,11 @@ class Client:
         require(info.get("Ссылка"), "Нет ссылки или содержимого файла; сохранение вложений невозможно.")
         file_url(info["Ссылка"])
         try:
+            if archive:
+                data = self.transport.get(info["Ссылка"], archive=True)
+                require(zipfile.is_zipfile(io.BytesIO(data)),
+                        "Сервер не вернул ZIP-архив.", "invalid_response")
+                return data
             return self.transport.get(info["Ссылка"])
         except urllib.error.HTTPError as exc:
             exc.close()
@@ -181,9 +188,19 @@ class Client:
         except (OSError, urllib.error.URLError, http.client.HTTPException):
             raise ClientError("network_error", "Не удалось скачать файл. Ссылка и секреты скрыты.") from None
 
-    def download(self, identifier, directory):
+    def download(self, identifier, directory, archive=False):
         document = self.read(identifier)
         require(document.get("ЧастичныеДанные") != "Да", "Получены частичные данные; полная выгрузка невозможна.", "partial_data")
+        if archive:
+            url = document.get("СсылкаНаАрхив")
+            require(isinstance(url, str) and url.strip(),
+                    "В документе нет ссылки на архив.", "archive_unavailable")
+            content = self.get_file({"Ссылка": url}, archive=True)
+            root = Path(directory)
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = save_file(root, safe_name(identifier) + ".zip", content)
+            return {"document_id": identifier, "files": [
+                {"kind": "archive", "path": str(path), "bytes": len(content)}]}
         root = Path(directory)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         saved = []
@@ -194,24 +211,29 @@ class Client:
                 require(isinstance(info, dict), "Нет файла вложения или подписи.", "invalid_response")
                 content = self.get_file(info)
                 name = safe_name(info.get("Имя", "file.bin"))
-                stem, suffix = os.path.splitext(name)
-                index = 0
-                while True:
-                    path = root / (name if not index else f"{stem}_{index}{suffix}")
-                    try:
-                        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                        break
-                    except FileExistsError:
-                        index += 1
-                try:
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(content)
-                except OSError:
-                    path.unlink(missing_ok=True)
-                    raise
+                path = save_file(root, name, content)
                 saved.append({"kind": kind, "path": str(path), "bytes": len(content),
                               "attachment_id": attachment.get("Идентификатор")})
         return {"document_id": identifier, "files": saved}
+
+
+def save_file(root, name, content):
+    stem, suffix = os.path.splitext(name)
+    index = 0
+    while True:
+        path = root / (name if not index else f"{stem}_{index}{suffix}")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            break
+        except FileExistsError:
+            index += 1
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+    except OSError:
+        path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def safe_name(name):
