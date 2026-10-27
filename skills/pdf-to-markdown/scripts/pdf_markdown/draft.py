@@ -71,6 +71,10 @@ def build_draft(manifest, records, asset_prefix=''):
             sections.append(f"- Требует внимания: `{issue['code']}`; область: {issue.get('bbox')}; "
                             f"подробности: {issue.get('details', {})}.")
         for note in record.get('review_notes', []):
+            if note['status'] == 'pending' and note['result'] == 'needs_review':
+                sections.append(f"- [требует сверки: {note['basis']}] Область: {note['bbox']}; "
+                                f"элементы: {note['element_ids']}; запись журнала: `{note['id']}`.")
+                continue
             sections.append(f"- Визуальная проверка `{note['id']}`: {note['status']}, {note['result']}; "
                             f"охват: {note['scope']}, область: {note['bbox']}, элементы: {note['element_ids']}. {note['basis']}")
             if note['status'] == 'stale' and note['corrected'] is not None:

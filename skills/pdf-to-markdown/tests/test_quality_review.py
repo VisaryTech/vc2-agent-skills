@@ -135,6 +135,29 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.manifest()['review_status'], 'verified')
         self.assertTrue(self.manifest()['quality_flags'])
 
+    def test_unresolved_reverse_check_persists_without_ocr_and_can_be_resolved(self):
+        self.extract('--pages', '1')
+        payload = self.payload(result='needs_review', corrected=None)
+        payload['reviews'][0]['evidence'] = []
+        payload['reviews'][0]['basis'] = 'Suspicious exponent; visual comparison unavailable'
+        with patch.object(PaddleEngine, 'predict', side_effect=AssertionError('Unexpected OCR')):
+            self.assertEqual(self.register(payload), 0)
+            self.assertEqual(self.manifest()['reviews'][0]['status'], 'pending')
+            self.assertEqual(self.manifest()['review_status'], 'pending')
+            self.assertIn('[требует сверки:', self.markdown())
+            self.assertIn('Original text 1', self.markdown())
+            review.publish(self.out, self.manifest(), self.records())
+            self.assertIn('[требует сверки:', self.markdown())
+            self.assertEqual(self.register(self.payload()), 0)
+        self.assertEqual([s['status'] for s in self.manifest()['reviews']], ['superseded', 'verified'])
+        self.assertNotIn('Suspicious exponent', self.markdown())
+        self.assertIn('Corrected text', self.markdown())
+
+    def test_unresolved_review_rejects_guessed_correction(self):
+        self.extract('--pages', '1')
+        self.assertEqual(self.register(self.payload(result='needs_review')), 2)
+        self.assertFalse((self.out / '.work/reviews.json').exists())
+
     def test_foreign_pdf_does_not_receive_old_corrections(self):
         self.extract('--pages', '1')
         self.register(self.payload())

@@ -52,13 +52,16 @@ def apply_reviews(manifest, records, journal):
                                    for key, value in item['fingerprints'].items()))
         if item['scope'] == 'page' and set(elements) != set(item['element_ids']):
             stale = True
-        state['status'] = 'stale' if stale else 'verified'
+        state['status'] = 'stale' if stale else ('pending' if item['result'] == 'needs_review' else 'verified')
         if not record:
             continue
         record.setdefault('review_notes', []).append({**state, 'result': item['result'],
                                                       'basis': item['basis'], 'corrected': item['corrected']})
         if stale:
             record['quality_flags'].append(flag('stale_review', item['bbox'], review_id=item['id']))
+            continue
+        if item['result'] == 'needs_review':
+            record['quality_flags'].append(flag('needs_review', item['bbox'], review_id=item['id']))
             continue
         for key in item['element_ids']:
             elements[key]['review_status'] = 'verified'
@@ -83,7 +86,7 @@ def apply_reviews(manifest, records, journal):
         relevant = [s for s in states if s['pdf_page'] == record['pdf_page']]
         checked = [e for e in record['elements'] if e.get('review_status') == 'verified']
         record['review_status'] = ('stale' if any(s['status'] == 'stale' for s in relevant) else
-                                   'verified' if record.get('page_reviewed') else
+                                   'verified' if record.get('page_reviewed') and not any(s['status'] == 'pending' for s in relevant) else
                                    'partial' if checked else 'pending')
     return records, states
 
@@ -156,11 +159,13 @@ def register(args):
         if scope == 'page' and not rect.contains(fitz.Rect(record['size_points'])):
             raise ValueError('Полная сверка должна охватывать страницу')
         result = item.get('result')
-        if result not in ('confirmed', 'recognition_error', 'source_contradiction', 'unreadable'):
+        if result not in ('confirmed', 'recognition_error', 'source_contradiction', 'unreadable', 'needs_review'):
             raise ValueError('Неизвестный result')
         corrected = item.get('corrected')
         if corrected is not None and not isinstance(corrected, str):
             raise ValueError('corrected должен быть строкой или null')
+        if result == 'needs_review' and (corrected is not None or scope != 'elements'):
+            raise ValueError('Для needs_review нужны scope=elements и corrected=null')
         if result == 'recognition_error' and corrected is None:
             raise ValueError('Для ошибки распознавания нужен corrected')
         if result == 'unreadable' and corrected is not None and '[неразборчиво' not in corrected:
@@ -170,7 +175,7 @@ def register(args):
         if not isinstance(item.get('basis'), str) or not item['basis'].strip():
             raise ValueError('Нужно основание визуальной сверки')
         evidence = item.get('evidence')
-        if not isinstance(evidence, list) or not evidence:
+        if not isinstance(evidence, list) or (not evidence and result != 'needs_review'):
             raise ValueError('Нужны ссылки evidence на просмотренные изображения')
         for value in evidence:
             if not isinstance(value, str):
