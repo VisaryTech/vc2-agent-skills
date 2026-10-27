@@ -4,6 +4,8 @@ from pathlib import Path
 
 import fitz
 
+from .quality import assess_native
+
 
 def pages_arg(value, count):
     if value is None:
@@ -40,7 +42,8 @@ def native_content(page):
                       "size": s["size"], "font": s["font"], "flags": s["flags"]}
                      for s in line["spans"]]
             lines.append({"text": "".join(s["text"] for s in spans),
-                          "bbox": list(line["bbox"]), "spans": spans})
+                          "bbox": list(line["bbox"]), "spans": spans,
+                          "direction": list(line['dir']), "writing_mode": line['wmode']})
         blocks.append({"bbox": list(block["bbox"]), "lines": lines,
                        "text": "\n".join(l["text"] for l in lines)})
     images = [list(i["bbox"]) for i in page.get_image_info()]
@@ -48,9 +51,7 @@ def native_content(page):
 
 
 def needs_ocr(blocks, images, page_area):
-    text = "\n".join(b["text"] for b in blocks)
-    # Image regions may contain text even when a page also has native text.
-    return not usable(text) or any(fitz.Rect(b).get_area() >= page_area * .005 for b in images)
+    return bool(assess_native(blocks, images, page_area)['flags'])
 
 
 def native_tables(page):
@@ -64,6 +65,26 @@ def native_tables(page):
     except Exception as exc:
         return [], f"Не удалось извлечь кандидаты таблиц: {exc}"
     return tables, None
+
+
+def vector_content(page):
+    """Keep vector artwork (including outlined letters) available for OCR/review."""
+    def serial(value):
+        if isinstance(value, dict):
+            return {k: serial(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, fitz.Rect, fitz.Point, fitz.Quad, fitz.Matrix)):
+            return [serial(v) for v in value]
+        return value
+    paths = page.get_drawings()
+    if not paths:
+        return [], []
+    box = fitz.Rect(paths[0]['rect'])
+    for path in paths[1:]:
+        box |= path['rect']
+    # Zero-width strokes still carry visible information.
+    box = fitz.Rect(box.x0 - 1, box.y0 - 1, box.x1 + 1, box.y1 + 1)
+    box &= page.rect * page.derotation_matrix
+    return serial(paths), [list(box)] if not box.is_empty else []
 
 
 def open_pdf(source):

@@ -7,6 +7,15 @@ from pathlib import Path
 import fitz
 
 
+def automatic_models(lang):
+    """Fingerprint known resolved default weights, otherwise disclose the limitation."""
+    from .cache import model_signature
+    names = ('PP-OCRv5_mobile_det', 'cyrillic_PP-OCRv5_mobile_rec') if lang in (
+        'ru', 'ru,en', 'en,ru') else ()
+    root = Path(os.environ.get('PADDLE_PDX_CACHE_HOME', Path.home() / '.paddlex')) / 'official_models'
+    return {name: model_signature(root / name) if (root / name).is_dir() else None for name in names}
+
+
 @dataclass(frozen=True)
 class OCRConfig:
     lang: str = "ru,en"
@@ -19,8 +28,11 @@ class PaddleEngine:
     def __init__(self, config: OCRConfig):
         self.config = config
         self.engine = None
+        self.last_raw = None
 
     def predict(self, pix, page):
+        from .quality import PROFILE
+        self.last_raw = None
         if self.engine is None:
             # Lazy import keeps native extraction and rendering lightweight.
             if self.config.det_model_dir and self.config.rec_model_dir:
@@ -29,7 +41,7 @@ class PaddleEngine:
             options = dict(device="cpu", cpu_threads=self.config.threads,
                            enable_mkldnn=False, use_doc_orientation_classify=False,
                            use_doc_unwarping=False, use_textline_orientation=False,
-                           text_det_limit_side_len=4000, text_det_limit_type="max",
+                           text_det_limit_side_len=PROFILE['ocr_max_side'], text_det_limit_type="max",
                            text_rec_score_thresh=0.0)
             if self.config.lang in ("ru", "ru,en", "en,ru"):
                 options.update(text_detection_model_name="PP-OCRv5_mobile_det",
@@ -47,6 +59,7 @@ class PaddleEngine:
         data = result.json
         if isinstance(data, str):
             data = json.loads(data)
+        self.last_raw = data
         data = data.get("res", data)
         boxes = data.get("rec_polys", data.get("rec_boxes"))
         texts, scores = data["rec_texts"], data["rec_scores"]

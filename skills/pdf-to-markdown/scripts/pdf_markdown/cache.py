@@ -10,7 +10,7 @@ import tempfile
 import fitz
 
 LOG = logging.getLogger("pdf-to-markdown")
-SCHEMA = 2
+SCHEMA = 3
 
 
 def atomic_text(path, text):
@@ -61,12 +61,17 @@ def package_version(name):
 
 
 def settings_for(args):
+    from .quality import PROFILE
+    from .ocr import automatic_models
     return {"schema": SCHEMA, "ocr": args.ocr, "lang": args.lang, "dpi": args.dpi,
+            "quality_profile": dict(PROFILE),
             "threads": args.threads, "pymupdf": fitz.VersionBind,
             "paddleocr": package_version("paddleocr"),
             "paddlepaddle": package_version("paddlepaddle"),
             "det_model": model_signature(args.det_model_dir),
-            "rec_model": model_signature(args.rec_model_dir)}
+            "rec_model": model_signature(args.rec_model_dir),
+            "automatic_models": automatic_models(args.lang) if args.ocr != 'never' and not (
+                args.det_model_dir and args.rec_model_dir) else {}}
 
 
 def cache_key(source_hash, number, settings):
@@ -81,11 +86,15 @@ def load_cached_page(cache, key, number, ocr_mode):
             candidate = json.loads(cache.read_text(encoding="utf-8"))
             if (isinstance(candidate, dict) and candidate.get("cache_key") == key
                     and candidate.get("status") == "success"
+                    and candidate.get("schema") == SCHEMA
                     and candidate.get("pdf_page") == number
                     and all(isinstance(candidate.get(field), list) for field in
-                            ("native_blocks", "ocr_lines", "issues", "table_candidates"))
+                            ("native_blocks", "ocr_lines", "issues", "table_candidates",
+                             "elements", "quality_flags", "attempts"))
                     and candidate.get("ocr_mode") == ocr_mode):
-                return candidate
-        except (ValueError, OSError):
+                immutable = cache.parent.parent / candidate['cache_path']
+                if json.loads(immutable.read_text(encoding='utf-8')) == candidate:
+                    return candidate
+        except (ValueError, OSError, KeyError, TypeError):
             LOG.warning("Повреждённый кэш страницы %s: повторная обработка", number)
     return None

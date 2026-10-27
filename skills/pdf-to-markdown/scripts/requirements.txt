@@ -1,5 +1,6 @@
-# Python 3.11, CPU. Base extraction/rendering needs only PyMuPDF.
+# Python 3.11/3.12, CPU. Base extraction/rendering needs only PyMuPDF.
 PyMuPDF==1.26.6
 paddleocr==3.3.2
 paddlepaddle==3.2.2
 numpy>=1.26,<2
+Pillow>=10,<13

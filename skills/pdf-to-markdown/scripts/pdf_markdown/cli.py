@@ -7,6 +7,7 @@ import fitz
 
 from .document import render
 from .extraction import extract
+from .review import register
 
 LOG = logging.getLogger("pdf-to-markdown")
 
@@ -45,7 +46,12 @@ def parser():
     command.add_argument("--det-model-dir")
     command.add_argument("--rec-model-dir")
     command.add_argument("--refresh", action="store_true")
+    command.add_argument("--fail-on-quality", action="store_true")
     command.set_defaults(run=extract)
+    command = sub.add_parser('review', help='Зарегистрировать визуальную сверку и исправления из JSON')
+    command.add_argument('input')
+    command.add_argument('--out', required=True)
+    command.set_defaults(run=register)
     for name in ("render", "crop"):
         command = sub.add_parser(name)
         command.add_argument("input")
