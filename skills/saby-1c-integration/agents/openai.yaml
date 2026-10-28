@@ -1,4 +1,0 @@
-interface:
-  display_name: "Интеграция Saby с 1С"
-  short_description: "Выбор, настройка и диагностика интеграции Saby с 1С"
-  default_prompt: "Используй $saby-1c-integration, чтобы подобрать и настроить интеграцию Saby с моей базой 1С."
