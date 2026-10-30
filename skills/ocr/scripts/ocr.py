@@ -14,6 +14,42 @@ class OCRError(Exception):
     pass
 
 
+class OCRHTTPError(OCRError):
+    def __init__(self, status, body):
+        super().__init__(f'HTTP {status}: {body}')
+        self.status = status
+        self.body = body
+
+
+def load_config(env=None):
+    source = os.environ if env is None else env
+    missing = [name for name in ('OCR_API_URL', 'OCR_API_KEY')
+               if not source.get(name, '').strip()]
+    if missing:
+        raise OCRError('Set required environment variables: ' + ', '.join(missing))
+    base = source['OCR_API_URL'].strip().rstrip('/')
+    key = source['OCR_API_KEY']
+    try:
+        url = parse.urlsplit(base)
+        valid = (url.scheme in ('http', 'https') and url.hostname
+                 and not url.username and not url.password and not url.query and not url.fragment
+                 and not any(c.isspace() for c in base))
+        url.port  # Validate port syntax and range without connecting.
+    except ValueError:
+        valid = False
+    if not valid:
+        raise OCRError('OCR_API_URL must be an HTTP(S) base URL without credentials, query or fragment')
+    if any(not 33 <= ord(c) <= 126 for c in key):
+        raise OCRError('OCR_API_KEY must contain only printable ASCII characters without whitespace')
+    return base, key
+
+
+def validate_env(env=None):
+    """Validate configuration locally without exposing values or accessing the API."""
+    load_config(env)
+    return {'ok': True}
+
+
 class NoRedirect(request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -21,30 +57,27 @@ class NoRedirect(request.HTTPRedirectHandler):
 
 class Client:
     def __init__(self):
-        self.base = os.environ.get('OCR_API_URL', '').strip().rstrip('/')
-        self.key = os.environ.get('OCR_API_KEY', '')
-        if not self.base:
-            raise OCRError('Set OCR_API_URL in the calling environment')
-        if not self.key:
-            raise OCRError('Set OCR_API_KEY in the calling environment')
-        url = parse.urlsplit(self.base)
-        if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
-            raise OCRError('OCR_API_URL must be an HTTP(S) base URL without credentials, query or fragment')
+        self.base, self.key = load_config()
 
     def call(self, path, data=None, content_type=None, timeout=30):
         headers = {'X-API-Key': self.key, 'Accept': 'application/json'}
         if content_type:
             headers['Content-Type'] = content_type
-        req = request.Request(self.base + path, data=data, headers=headers)
         try:
+            req = request.Request(self.base + path, data=data, headers=headers)
             with request.build_opener(NoRedirect).open(req, timeout=timeout) as response:
-                return json.load(response)
+                try:
+                    return json.load(response)
+                except ValueError as exc:
+                    raise OCRError('Service returned invalid JSON') from exc
         except error.HTTPError as exc:
-            raise OCRError(f'HTTP {exc.code}: {exc.read().decode("utf-8", "replace")[:1000]}') from exc
+            with exc:
+                body = exc.read(1000).decode('utf-8', 'replace')
+            raise OCRHTTPError(exc.code, body) from exc
         except (error.URLError, TimeoutError, OSError) as exc:
             raise OCRError(f'Network error: {exc}; do not automatically resubmit uploads') from exc
         except ValueError as exc:
-            raise OCRError('Service returned invalid JSON') from exc
+            raise OCRError('Could not construct or encode HTTP request; check configuration') from exc
 
     def submit(self, path, unwarp):
         mime = {'.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg',
@@ -98,6 +131,7 @@ def save_result(result, directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('check-env', help='Проверить настройки без подключения к API')
     commands.add_parser('check')
     status = commands.add_parser('status')
     status.add_argument('job_id')
@@ -112,6 +146,9 @@ def main():
     job_id = getattr(args, 'job_id', None)
     client = None
     try:
+        if args.command == 'check-env':
+            print(json.dumps(validate_env(), ensure_ascii=False))
+            return 0
         client = Client()
         if args.command == 'check':
             health = client.call('/health')
@@ -120,9 +157,17 @@ def main():
                 raise OCRError(f'Service not ready: health={health}, ready={ready}')
             try:
                 client.call(job_path('availability-check-' + uuid.uuid4().hex))
-            except OCRError as exc:
-                if not isinstance(exc.__cause__, error.HTTPError) or exc.__cause__.code != 404:
+            except OCRHTTPError as exc:
+                if exc.status != 404:
                     raise
+                try:
+                    body = json.loads(exc.body)
+                except ValueError:
+                    raise OCRError('Authorization check returned an unexpected 404 response') from exc
+                if body != {'detail': 'Job not found or expired'}:
+                    raise OCRError('Authorization check returned an unexpected 404 response') from exc
+            else:
+                raise OCRError('Authorization check unexpectedly found a nonexistent job')
             output = {'health': health, 'ready': ready, 'api_key': 'accepted'}
         elif args.command == 'status':
             output = client.call(job_path(job_id))
@@ -142,6 +187,9 @@ def main():
         return 0
     except (OCRError, OSError) as exc:
         message = str(exc)
+        if args.command == 'check-env':
+            print(json.dumps({'ok': False, 'error': 'configuration_error', 'message': message}, ensure_ascii=False))
+            return 2
         if client:
             message = message.replace(client.key, '[REDACTED]')
         print(json.dumps({'error': message, 'job_id': job_id}, ensure_ascii=False), file=sys.stderr)
