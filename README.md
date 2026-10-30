@@ -1,5 +1,6 @@
 | Скилл | Возможности | Настройка |
 | --- | --- | --- |
+| [Сетевая папка](skills/network-folder/SKILL.md) | Просмотр, поиск, скачивание, загрузка, перемещение и удаление файлов по SMB | [Настройка](skills/network-folder/references/authentication.md) |
 | [OCR](skills/ocr/SKILL.md) | Распознавание сканов, чеков, фотографий и PDF через PaddleOCR; текст, Markdown и JSON | [Настройка](skills/ocr/references/authentication.md) |
 | [СБИС](skills/sbis/README.md) | Поиск и чтение документов, проверка статусов, скачивание вложений и подписей, создание и обновление исходящих черновиков | [Настройка](skills/sbis/references/authentication.md) |
 | [Диадок](skills/diadoc/README.md) | Поиск и чтение документов, проверка статусов, скачивание файлов и подписей, создание исходящих черновиков и их изменённых копий | [Настройка](skills/diadoc/references/authentication.md) |

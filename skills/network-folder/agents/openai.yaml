@@ -1,0 +1,3 @@
+interface:
+  display_name: "Сетевая папка"
+  short_description: "Поиск, чтение и изменение файлов по SMB"
