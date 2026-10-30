@@ -1,4 +1,0 @@
-interface:
-  display_name: "PDF в Markdown"
-  short_description: "PDF в Markdown: качество, структура и визуальная сверка"
-  default_prompt: "Используй $pdf-to-markdown, чтобы извлечь PDF в Markdown, проверить полноту и визуально сверить проблемные области, сохранив происхождение фрагментов и нерешённые сомнения."
