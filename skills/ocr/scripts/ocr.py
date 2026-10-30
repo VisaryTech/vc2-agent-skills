@@ -21,8 +21,10 @@ class NoRedirect(request.HTTPRedirectHandler):
 
 class Client:
     def __init__(self):
-        self.base = os.environ.get('OCR_API_URL', 'http://172.17.102.37:5001').rstrip('/')
+        self.base = os.environ.get('OCR_API_URL', '').strip().rstrip('/')
         self.key = os.environ.get('OCR_API_KEY', '')
+        if not self.base:
+            raise OCRError('Set OCR_API_URL in the calling environment')
         if not self.key:
             raise OCRError('Set OCR_API_KEY in the calling environment')
         url = parse.urlsplit(self.base)
