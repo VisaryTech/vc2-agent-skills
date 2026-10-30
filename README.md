@@ -1,5 +1,6 @@
 | Скилл | Возможности | Настройка |
 | --- | --- | --- |
+| [OCR](skills/ocr/SKILL.md) | Распознавание сканов, чеков, фотографий и PDF через PaddleOCR; текст, Markdown и JSON | `OCR_API_KEY`, необязательно `OCR_API_URL` |
 | [PDF в Markdown](skills/pdf-to-markdown/SKILL.md) | Извлечение текста и OCR сканов, сохранение структуры и страниц, визуальная сверка таблиц и формул | [Локальная обработка](skills/pdf-to-markdown/references/cli.md) |
 | [СБИС](skills/sbis/README.md) | Поиск и чтение документов, проверка статусов, скачивание вложений и подписей, создание и обновление исходящих черновиков | [Настройка](skills/sbis/references/authentication.md) |
 | [Диадок](skills/diadoc/README.md) | Поиск и чтение документов, проверка статусов, скачивание файлов и подписей, создание исходящих черновиков и их изменённых копий | [Настройка](skills/diadoc/references/authentication.md) |

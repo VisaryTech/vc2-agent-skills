@@ -1,0 +1,3 @@
+interface:
+  display_name: "OCR"
+  short_description: "Распознавание сканов, чеков и PDF через PaddleOCR"
